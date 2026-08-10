@@ -21,6 +21,7 @@ int main() {
     const controller::Controller::UserTable users = {
         {"alice", "alice123"},
         {"bob",   "bob456"},
+        {"neuroil", "123"},
     };
 
     controller::Controller controller(assembler, users_group, users);

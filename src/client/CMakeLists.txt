@@ -1,2 +1,2 @@
-add_executable(client main.cpp)
-target_link_libraries(client PRIVATE com_lite_base)
+add_executable(client_test client_test.cpp)
+target_link_libraries(client_test PRIVATE com_lite_base)
