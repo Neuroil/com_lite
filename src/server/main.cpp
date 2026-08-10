@@ -20,8 +20,9 @@ int main() {
     // 演示用户表：uid -> 登录凭证。真实认证（数据库 / 外部鉴权）落地前先静态查表。
     const controller::Controller::UserTable users = {
         {"alice", "alice123"},
-        {"bob",   "bob456"},
+        {"bob", "bob456"},
         {"neuroil", "123"},
+        {"whr", "123"},
     };
 
     controller::Controller controller(assembler, users_group, users);

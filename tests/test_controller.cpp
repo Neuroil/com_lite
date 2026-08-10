@@ -158,6 +158,116 @@ int main() {
         CHECK(out_queue[1].first.fh_.status_ == Status::ok);
     }
 
+    // ── query_all: 同 uid 多 fd → 返回全部 fd ────────────
+    {
+        Assembler  asm_;
+        UsersGroup ug;
+        Controller ctrl(asm_, ug);
+
+        CHECK(ctrl.register_user("alice", 42) == RegisterResult::Registered);
+        CHECK(ctrl.register_user("alice", 43) == RegisterResult::Registered);
+
+        const std::vector<int>* fds = nullptr;
+        CHECK(ctrl.query_all("alice", fds));
+        CHECK(fds != nullptr);
+        // 顺序即注册顺序：42 先、43 后
+        CHECK(fds->size() == 2);
+        CHECK((*fds)[0] == 42);
+        CHECK((*fds)[1] == 43);
+    }
+
+    // ── query_all: 不存在的 uid → false 且指针置空 ───────
+    {
+        Assembler  asm_;
+        UsersGroup ug;
+        Controller ctrl(asm_, ug);
+
+        const std::vector<int>* fds = nullptr;
+        CHECK(!ctrl.query_all("nobody", fds));
+        CHECK(fds == nullptr);
+    }
+
+    // ── process: request → 目标同 uid 多 fd → fan-out 转发 ─
+    {
+        Assembler  asm_;
+        UsersGroup ug;
+        Controller ctrl(asm_, ug);
+
+        // 目标用户两台设备在线（fd 99、100），发送方 fd 42 已登录
+        CHECK(ctrl.register_user("receiver", 99) == RegisterResult::Registered);
+        CHECK(ctrl.register_user("receiver", 100) == RegisterResult::Registered);
+        CHECK(ctrl.register_user("sender", 42) == RegisterResult::Registered);
+
+        MessagePack                             req = make_request("receiver");
+        std::vector<std::pair<MessagePack, int>> out_queue;
+
+        ctrl.process(42, req, out_queue);
+
+        // out_queue 应有三条：
+        // [0]、[1] = 转发帧 → fd 99、100（目标用户两台设备，按注册顺序）
+        // [2] = response 帧 → fd 42（入站 fd，发送方其它设备不收）
+        CHECK(out_queue.size() == 3);
+
+        CHECK(out_queue[0].second == 99);
+        CHECK(out_queue[0].first.fh_.opcode_ == Opcode::request);
+        CHECK(out_queue[1].second == 100);
+        CHECK(out_queue[1].first.fh_.opcode_ == Opcode::request);
+
+        CHECK(out_queue[2].second == 42);
+        CHECK(out_queue[2].first.fh_.opcode_ == Opcode::response);
+        CHECK(out_queue[2].first.fh_.status_ == Status::ok);
+    }
+
+    // ── process: request → 目标包含发送方自身 fd → 不排除 ─
+    {
+        Assembler  asm_;
+        UsersGroup ug;
+        Controller ctrl(asm_, ug);
+
+        // sender 两台设备（42 = 入站、43 = 另一台），发给自己：
+        // fan-out 不排除发送方自身 fd —— 是否自收是 core 层的处置范畴
+        // （to_fd == fd 回落入站杀点），协调层只按集合全量分发
+        CHECK(ctrl.register_user("sender", 42) == RegisterResult::Registered);
+        CHECK(ctrl.register_user("sender", 43) == RegisterResult::Registered);
+
+        MessagePack                             req = make_request("sender");
+        std::vector<std::pair<MessagePack, int>> out_queue;
+
+        ctrl.process(42, req, out_queue);
+
+        CHECK(out_queue.size() == 3);
+        // 转发 ×2：自身 fd 42 也在集合里、随后 43
+        CHECK(out_queue[0].second == 42);
+        CHECK(out_queue[0].first.fh_.opcode_ == Opcode::request);
+        CHECK(out_queue[1].second == 43);
+        CHECK(out_queue[1].first.fh_.opcode_ == Opcode::request);
+        // 回执回入站 fd
+        CHECK(out_queue[2].second == 42);
+        CHECK(out_queue[2].first.fh_.opcode_ == Opcode::response);
+    }
+
+    // ── delete_fd: 摘掉一台设备后 query_all 收缩 ────────
+    {
+        Assembler  asm_;
+        UsersGroup ug;
+        Controller ctrl(asm_, ug);
+
+        CHECK(ctrl.register_user("alice", 42) == RegisterResult::Registered);
+        CHECK(ctrl.register_user("alice", 43) == RegisterResult::Registered);
+        CHECK(ctrl.delete_fd(43));
+
+        const std::vector<int>* fds = nullptr;
+        CHECK(ctrl.query_all("alice", fds));
+        CHECK(fds != nullptr);
+        CHECK(fds->size() == 1);
+        CHECK((*fds)[0] == 42);
+
+        // 全部摘掉后 uid 整条消失
+        CHECK(ctrl.delete_fd(42));
+        CHECK(!ctrl.query_all("alice", fds));
+        CHECK(fds == nullptr);
+    }
+
     // ── process: request 但目标未注册 → 只产生 response(fail)，不转发 ─
     {
         Assembler  asm_;

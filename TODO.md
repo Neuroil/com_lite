@@ -6,12 +6,15 @@
 
 ### 待办
 
-- [ ] **跨 fd 转发 — fan-out**（`pending_close_` 排除与 `EPOLLOUT` 武装已消费，剩最后一子项）
+- [x] **跨 fd 转发 — fan-out**（同 uid 多设备投递，2026-08-08 落地）
   `src/server/core/core.cpp:219`
-  > 基础通路已落地（`controller.cpp:78` 的 `out_queue.emplace_back(rmp, to_fd)`，
+  > 基础通路已落地（`controller.cpp:83` 的 `out_queue.emplace_back(rmp, to_fd)`，
   > `core.cpp:226` 的 `conns_.find(to_fd)` 查目标连接写入）。
   > **2026-08-06** 消费 `pending_close_` 排除（连带把失败归因从「杀发送方」改成「杀目标」）；
-  > **2026-08-07** 消费 `EPOLLOUT` 武装。标题已改：只剩 fan-out，**不要把它读成「转发已经做完了」**。
+  > **2026-08-07** 消费 `EPOLLOUT` 武装；
+  > **2026-08-08** 落地 fan-out 本体（commit 55f90e9）：`query_all` 取 fd 集合 → 逐 fd 入队。
+  > 出站帧目标不再是入站 fd，而是目标 uid 的 fd 集合 —— 装配器仍不接触 fd
+  > （见下方「装配器不做路由」边界）。落地细节见 `docs/logs/2026-08-10.md`。
   - [x] 目标 fd 的 `EPOLLOUT` 无人武装：`update_events()`（`core.h:45`，私有）只对**当前** fd
     调用一次。向另一个 fd 部分写入后，没有任何地方会给它挂上 `EPOLLOUT`，该连接的出站数据会
     **静默无限期滞留**。反方向同样要小心：LT 模式下 `EPOLLOUT` 挂在空闲可写的 socket 上会让
@@ -34,10 +37,15 @@
     > 之后的回执不会被吞），写目标失败改为 `close_client(to_fd)` 杀**目标**而非发送方；自发自收
     > （`to_fd == fd`）回落到唯一的入站杀点。`close_client()` 同时改为幂等，避免同一 fd 重复入队
     > 触发两次 `disconnect_handler_`。不变式 (c) 已按「仅对入站 fd 为 0」重写（`core.cpp:167`）。
-  - [ ] fan-out：`to_uid_` → fd 集合的解析与多 fd 分发（协调层职责，
-    见 `docs/architecture.md` §2.2）。前置已满足：`user.h:14` 的 `fds_` 向量 + `vec()`
-    （`user.h:44-50`）已落地（2026-08-06，commit 2e315b2）；`UsersGroup::query` 仍取 `fds_[0]`
-    （`user.h:36-42`），一次请求只投递目标 uid 的第一个在线设备。
+  - [x] fan-out：`to_uid_` → fd 集合的解析与多 fd 分发（协调层职责，
+    见 `docs/architecture.md` §2.2）。
+    > 2026-08-08 落地（commit 55f90e9）：`UsersGroup::query_all`（`users_group.h:174`，
+    > 只读向量指针语义，失败置 `nullptr`）+ `Controller::query_all`（`controller.cpp:111`）
+    > 双层接线；request 分支 `query_all` 查目标 uid 的 fd 集合后逐 fd 入队
+    > （`controller.cpp:73`、`:82-84`），转发顺序即 `fds_` 注册顺序。
+    > 回执（response）仍只回入站 fd（发送方当前设备），其余设备不收 —— 该范围是
+    > 落地时的实现默认，未显式拍板，见 `docs/logs/2026-08-10.md` §4.1。
+    > 前置（2026-08-06，commit 2e315b2）：`user.h` 的 `fds_` 向量 + `vec()`。
 
 - [x] **`UsersGroup` 没有接入点** `src/server/coordination/users_group.h`
   > 2026-08-04 落地：键统一为 `std::string`，新增 `register_user` / `delete_fd` / `query`，双向映射 `uid_to_fd_` + `fd_to_uid_`；
@@ -135,9 +143,9 @@
 以下**不是**待办，是已经做出的决定。要改动它们，得先推翻决定本身。
 
 - **装配器不做路由。** `coordination::Assembler` 的签名里没有 fd，也不持有 `UsersGroup` ——
-  它只负责把出站 `MessagePack` **装配**出来，「送到哪个 fd」由调用方决定。在跨 fd 转发
-  （本文件第 1 条）落地之前，出站帧的目标 fd 恒等于入站 fd；因为装配器无法表达 fd，
-  误投在类型上不可发生。
+  它只负责把出站 `MessagePack` **装配**出来，「送到哪个 fd」由调用方决定。fan-out 落地后
+  出站帧的目标 fd 来自 `query_all` 返回的 fd 集合（`controller.cpp:82-84`），不再恒等于
+  入站 fd；因为装配器无法表达 fd，误投在类型上不可发生。
 - **`Encoder` 不做有效性校验**（`src/common/encoder.h:75-76`）。
   出站数据由程序自己构造，视为可信；入站数据才是敌意的。编解码不对称是有意的（2026-07-27 决策）。
   原文附带的「不检查 `out_buf` 容量」已随下一条作废：容量不再是调用方的义务，`encode()` 自己
