@@ -23,7 +23,7 @@
 namespace {
     // ---------------------------------------------------------------------
     // 黄金向量（手工推导，独立于编码器）
-    // json_len = 92 + Σ(四个字符串值的字节长度)；frame_len = 6 + json_len
+    // json_len = 92 + Σ(四个字符串值的字节长度)；frame_len = 10 + json_len
     // 键序为字节字典序：chat_type_ < client_msg_id_ < content_ < from_uid_ < msg_type_ < to_uid_
     // ---------------------------------------------------------------------
 
@@ -77,11 +77,23 @@ namespace {
     // ---------------------------------------------------------------------
     void decode_hand_authored_ascii() {
         const std::vector<std::byte> in = make_frame(0x01, 0x00, kJsonGv1);
-        CHECK(in.size() == 125);
+        CHECK(in.size() == 129);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::ok);
         check_gv1_fields(rmp);
+    }
+
+    // ---------------------------------------------------------------------
+    // D1b —— 魔数拒绝路径：10 字节新帧头布局的第一道门。
+    //        首 4 字节不是 0xFADEBEAD 时直接 error，先于任何字段解析。
+    // ---------------------------------------------------------------------
+    void decode_rejects_wrong_magic() {
+        std::vector<std::byte> in = make_frame(0x01, 0x00, kJsonGv1);
+        in[0] = std::byte{0x00};   // 破坏魔数首字节
+
+        MessagePack rmp;
+        CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::error);
     }
 
     // ---------------------------------------------------------------------
@@ -90,7 +102,7 @@ namespace {
     void decode_hand_authored_multibyte_len() {
         const std::string            kJsonGv2 = gv2_json();
         const std::vector<std::byte> in       = make_frame(0x02, 0x01, kJsonGv2);
-        CHECK(in.size() == 264);
+        CHECK(in.size() == 268);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::ok);
@@ -106,7 +118,7 @@ namespace {
     // ---------------------------------------------------------------------
     void decode_hand_authored_utf8_cjk() {
         const std::vector<std::byte> in = make_frame(0x01, 0x00, kJsonGv3);
-        CHECK(in.size() == 126);
+        CHECK(in.size() == 130);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::ok);
@@ -137,7 +149,7 @@ namespace {
     // ---------------------------------------------------------------------
     void decode_accepts_exactly_sized_buffer() {
         const std::vector<std::byte> in = make_frame(0x01, 0x00, kJsonGv1);
-        CHECK(in.size() == 6 + 119);
+        CHECK(in.size() == 10 + 119);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::ok);
@@ -163,7 +175,7 @@ namespace {
     // ---------------------------------------------------------------------
     void decode_returns_incomplete_for_truncated_body() {
         const std::vector<std::byte> in = make_frame(0x01, 0x00, 119u, kJsonGv1.substr(0, 118));
-        CHECK(in.size() == 124);
+        CHECK(in.size() == 128);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::incomplete);
@@ -175,7 +187,7 @@ namespace {
     // ---------------------------------------------------------------------
     void decode_rejects_absurd_declared_len() {
         const std::vector<std::byte> in = make_frame(0x01, 0x00, 0xFFFFFFFFu, kJsonGv1);
-        CHECK(in.size() == 125);
+        CHECK(in.size() == 129);
 
         MessagePack rmp;
         CHECK(codec::Decoder::decode(in, rmp) == types::IoStatus::frame_too_long);
@@ -345,6 +357,7 @@ int main() {
     verify_golden_vector_sizes();
 
     decode_hand_authored_ascii();
+    decode_rejects_wrong_magic();
     decode_hand_authored_multibyte_len();
     decode_hand_authored_utf8_cjk();
     decode_tolerates_oversized_buffer();

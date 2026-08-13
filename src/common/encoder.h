@@ -30,11 +30,13 @@ namespace codec {
 
         // header_encoder
         static void header_encoder(const FrameHeader& fh, std::vector<std::byte>& out_buf) noexcept {
-            out_buf[0] = static_cast<std::byte>(fh.opcode_);
-            out_buf[1] = static_cast<std::byte>(fh.status_);
+            out_buf[8] = static_cast<std::byte>(fh.opcode_);
+            out_buf[9] = static_cast<std::byte>(fh.status_);
 
             uint32_t safe_len = htonl(fh.body_len_);
-            std::memcpy(out_buf.data() + 2, &safe_len, sizeof(safe_len));
+            std::memcpy(out_buf.data() + 4, &safe_len, sizeof(safe_len));
+
+            std::memcpy(out_buf.data(), &types::magic_head, sizeof(types::magic_head));
         }
 
         // body_serializer
@@ -82,7 +84,7 @@ namespace codec {
             try {
                 const std::string serialized = body_serializer(rmp.msg_);
                 // 阈值是「帧体字节数」，与 FrameHeader::body_len_ 同语义（docs/architecture.md §2.4：
-                // body_len 不含 6 字节头），也与 Decoder 的同一道校验对齐。
+                // body_len 不含 10 字节头），也与 Decoder 的同一道校验对齐。
                 // 校验必须先于 resize 与 body_writer（位置理由见下）。比较也必须先于向 uint32_t 收窄。
                 if (serialized.size() > max_message_body_length) return types::IoStatus::frame_too_long;
 
@@ -91,7 +93,7 @@ namespace codec {
                 // resize 的位置被前后两侧同时确定
                 // 晚于 frame_too_long 校验：
                 //      出站帧体可能源自入站内容（回显）
-                //      先分配后校验等于让对端一个声称 65530 的 6 字节帧头就能诱导一次 64KB 分配。
+                //      先分配后校验等于让对端一个声称 65530 的 10 字节帧头就能诱导一次 64KB 分配。
 
                 // 早于 rmp.fh_.body_len_ 回写：
                 //      resize 会抛 std::bad_alloc

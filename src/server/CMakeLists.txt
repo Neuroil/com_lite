@@ -5,4 +5,4 @@ add_executable(server
         main.cpp
         controller/controller.cpp
 )
-target_link_libraries(server PRIVATE core)
+target_link_libraries(server PRIVATE core ${OPENSSL_LIBRARIES})

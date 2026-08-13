@@ -8,7 +8,7 @@
 //   M2/M3 一次 send() 两帧、期望恰好两个回显（验证 drain 循环：粘包不丢帧、无 LT stall）。
 //   M4 半帧 → 停顿 → 补齐，期望恰好一个回显（验证 incomplete 不消耗字节、无失步）。
 //   M5 空 content_ 帧 + 合法帧，期望连接被关（验证 !msg.is_valid() 归 error 杀连接）。
-//   M6 6 字节未知 opcode 帧，期望连接被杀（验证 is_known_opcode 拒绝）。
+//   M6 10 字节新布局未知 opcode 帧（magic + body_len=0 + opcode=0x07），期望连接被杀（验证 is_known_opcode 拒绝）。
 // 退出码：预期结果 → 0；异常（超时、回显缺失/多帧、连接未关）→ 非 0。
 //
 // M1-M7 都是单连接场景，观测不到「跨 fd 转发」这条路径。M8-M10 是双进程场景：
@@ -50,7 +50,7 @@ namespace {
 
 constexpr int         kServerPort     = 7891;
 constexpr int         kRecvTimeoutSec = 5;  // 第二帧 / 连接关闭必须在该时间内发生
-constexpr std::size_t kM4PartialBody  = 8;  // M4 半帧：6 字节帧头 + 8 字节帧体
+constexpr std::size_t kM4PartialBody  = 8;  // M4 半帧：10 字节帧头 + 8 字节帧体
 
 // M8-M10 用
 constexpr std::size_t kNoBodyCap        = static_cast<std::size_t>(-1); // 不截断帧体打印
@@ -67,7 +67,7 @@ constexpr std::size_t kProgressEvery    = 16;  // 发送方每若干帧打印一
 // 循环（无 OOM），但会让本次运行时长任意拉长，纯属自伤。
 constexpr std::size_t kMaxSenderCount = 1'000'000;
 // 入站累积缓冲上限：防恶意对端声明超大 body_len 后慢速灌数据（帧体永不凑齐，acc 只进不出、
-// 无界增长）。1MiB 对齐服务端 kWriteHighWater 语义；合法帧最大 6+65530=65536B，此处是其
+// 无界增长）。1MiB 对齐服务端 kWriteHighWater 语义；合法帧最大 10+65530=65540B，此处是其
 // 16 倍，不会误伤正常流量。
 constexpr std::size_t kMaxAccBytes = 1 * 1024 * 1024;
 
@@ -152,9 +152,9 @@ bool pre_login(int fd, const std::string& uid, const std::string& credential,
         std::cerr << "[pre-login] no login response (closed / timeout)\n";
         return false;
     }
-    out_status = static_cast<std::uint8_t>(chunk[1]);
-    std::cout << "[pre-login] login response: opcode=" << static_cast<int>(chunk[0])
-              << " status=" << static_cast<int>(chunk[1]) << "\n";
+    out_status = static_cast<std::uint8_t>(chunk[9]);
+    std::cout << "[pre-login] login response: opcode=" << static_cast<int>(chunk[8])
+              << " status=" << static_cast<int>(chunk[9]) << "\n";
     return true;
 }
 
@@ -183,7 +183,7 @@ void drain_frames(std::vector<std::byte>& acc, int& count, const char* label,
                   std::size_t body_cap) {
     while (acc.size() >= FrameHeader::wire_size) {
         std::uint32_t body_len = 0;
-        std::memcpy(&body_len, acc.data() + 2, sizeof(body_len));
+        std::memcpy(&body_len, acc.data() + 4, sizeof(body_len));
         body_len = ntohl(body_len);
 
         const std::size_t frame_len = FrameHeader::wire_size + body_len;
@@ -193,8 +193,8 @@ void drain_frames(std::vector<std::byte>& acc, int& count, const char* label,
 
         const std::size_t print_len = body_len < body_cap ? body_len : body_cap;
         std::cout << "  " << label << " frame #" << (count + 1)
-                  << ": opcode=" << static_cast<int>(acc[0])
-                  << " status=" << static_cast<int>(acc[1])
+                  << ": opcode=" << static_cast<int>(acc[8])
+                  << " status=" << static_cast<int>(acc[9])
                   << " body_len=" << body_len
                   << " body=";
         std::cout.write(
@@ -223,7 +223,7 @@ int recv_frames(int fd, std::vector<std::byte>& acc, int want) {
         const ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
         if (n > 0) {
             acc.insert(acc.end(), chunk, chunk + n);
-            // 合法流量下 acc 峰值 = 一个未凑齐的帧残余（< 65536B）+ 本次 4096B；超过
+            // 合法流量下 acc 峰值 = 一个未凑齐的帧残余（< 65540B）+ 本次 4096B；超过
             // kMaxAccBytes 只可能来自恶意对端声明超大 body_len 后慢速灌数据（帧永不凑齐）。
             if (acc.size() > kMaxAccBytes) {
                 std::cout << "  inbound buffer exceeded " << kMaxAccBytes
@@ -525,7 +525,7 @@ void usage(const char* prog) {
         << "  m2/m3        : 一次 send() 发两个完整合法帧，期望恰好两个回显（验证 drain 无 LT stall / 粘包丢帧）\n"
         << "  m4           : 半帧（帧头 + 8B 帧体）→ 停顿 1.5s → 补齐，期望恰好一个回显（验证 incomplete 不消耗字节）\n"
         << "  m5           : 空 content_ 帧 + 合法帧一次 send()，期望连接被关\n"
-        << "  m6           : 6 字节未知 opcode 帧，期望连接被杀\n"
+        << "  m6           : 10 字节未知 opcode 帧（新布局），期望连接被杀\n"
         << "  m7 <uid> <credential> : 登录：发 login 帧，按响应帧头 status 判定（ok -> 0，fail -> 1）\n"
         << "  m8 <uid> <credential> [hold_sec] : 接收方：登录后持续收帧并打印，默认驻留 "
         << kHoldSecDefault << "s（收到 >=1 帧且未被关 -> 0）\n"
@@ -725,7 +725,7 @@ int main(int argc, char* argv[]) {
         } else {
             const std::size_t partial = FrameHeader::wire_size + kM4PartialBody;
             std::cout << "[m4] frame=" << frame.size() << "B; sending first " << partial
-                      << " bytes (6B header + " << kM4PartialBody << "B body)\n";
+                      << " bytes (10B header + " << kM4PartialBody << "B body)\n";
             if (!send_all(client_fd, frame.data(), partial)) {
                 std::cerr << "Failed to send partial frame\n";
             } else {
@@ -771,11 +771,12 @@ int main(int argc, char* argv[]) {
         }
     } else if (mode == "m6") {
         std::vector<std::byte> raw = {
+            std::byte{0xAD}, std::byte{0xBE}, std::byte{0xDE}, std::byte{0xFA}, // magic: 0xFADEBEAD（本机小端字节序，与 Encoder 一致）
+            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // body_len=0（大端）
             std::byte{0x07}, // opcode: 未知（枚举外线上字节，is_known_opcode 拒绝）
             std::byte{0x00}, // status: ok
-            std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, // body_len=0（大端）
         };
-        std::cout << "[m6] sending 6-byte frame: opcode=0x07(unknown) status=ok body_len=0\n";
+        std::cout << "[m6] sending 10-byte frame: magic=0xFADEBEAD opcode=0x07(unknown) status=ok body_len=0\n";
         if (!send_all(client_fd, raw.data(), raw.size())) {
             std::cerr << "Failed to send\n";
         } else {
@@ -803,10 +804,10 @@ int main(int argc, char* argv[]) {
                 std::byte chunk[4096];
                 const ssize_t n = recv(client_fd, chunk, sizeof(chunk), 0);
                 if (n >= static_cast<ssize_t>(FrameHeader::wire_size)) {
-                    const auto op = static_cast<std::uint8_t>(chunk[0]);
-                    const auto st = static_cast<std::uint8_t>(chunk[1]);
+                    const auto op = static_cast<std::uint8_t>(chunk[8]);
+                    const auto st = static_cast<std::uint8_t>(chunk[9]);
                     std::uint32_t body_len = 0;
-                    std::memcpy(&body_len, chunk + 2, sizeof(body_len));
+                    std::memcpy(&body_len, chunk + 4, sizeof(body_len));
                     body_len = ntohl(body_len);
                     // 只打印已实际到达的帧体字节，防声明长度超出本次 recv 越界读。
                     const std::size_t got_body =

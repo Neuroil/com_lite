@@ -175,7 +175,7 @@ namespace core {
             //     仍然只经由那个唯一的入站杀点。close_client() 本身另有幂等护栏（:314），两者互不替代。
             //
             // (d) 不加读缓冲上限，恒界可推导：drain 退出时 in 中只剩一个未完成帧:
-            //     < 6 字节或 wire_size + k 且 k < body_len ≤ 65530 => 残留 ≤ 65535;
+            //     < wire_size(10) 字节或 wire_size + k 且 k < body_len ≤ 65530 => 残留 ≤ 65539;
             //     on_readable 每轮 append ≤ 4096 且 size() >= 65536 即返回 => read_buf_ ≤ 69631 字节恒成立。
             //     承重前提：帧头未齐与 frame_too_long 校验必须先于帧体未齐校验
             //     [decoder.h 次序，S2 已在该文件落实为注释]

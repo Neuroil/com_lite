@@ -24,7 +24,7 @@ namespace {
     // 长度公式：json_len = 92 + Σ(四个字符串值的字节长度)
     //   —— 前提是两个枚举均为个位数、且无 JSON 转义。
     //   92 = 2 花括号 + 5 逗号 + 6 冒号 + 键名 57 + 键名引号 12 + 枚举值 2 + 字符串值引号 8
-    // 帧长：frame_len = 6 + json_len
+    // 帧长：frame_len = 10 + json_len
     //
     // 键序为字节字典序（nlohmann::json 默认 std::map 底层）：
     //   chat_type_ < client_msg_id_ < content_ < from_uid_ < msg_type_ < to_uid_
@@ -131,24 +131,29 @@ namespace {
 
         const types::IoStatus st = codec::Encoder::encode(rmp, buf, out_len);
         CHECK(st == types::IoStatus::ok);
-        CHECK(out_len == 125);
+        CHECK(out_len == 129);
 
         // 帧头逐字节钉死。绝不 reinterpret_cast 回 uint32_t 再比 —— 那在小端上是重言式，
         // 且违反 SEI CERT POS39-C / 严格别名。
-        CHECK(buf[0] == std::byte{0x01});   // opcode = request
-        CHECK(buf[1] == std::byte{0x00});   // status = ok
-        CHECK(buf[2] == std::byte{0x00});
-        CHECK(buf[3] == std::byte{0x00});
+        // 新布局：magic(4) | body_len(4, 大端) | opcode(1) | status(1)
+        CHECK(buf[0] == std::byte{0xAD});   // magic 0xFADEBEAD，本机 memcpy 落盘
+        CHECK(buf[1] == std::byte{0xBE});
+        CHECK(buf[2] == std::byte{0xDE});
+        CHECK(buf[3] == std::byte{0xFA});
         CHECK(buf[4] == std::byte{0x00});
-        CHECK(buf[5] == std::byte{0x77});   // body_len = 119，大端
+        CHECK(buf[5] == std::byte{0x00});
+        CHECK(buf[6] == std::byte{0x00});
+        CHECK(buf[7] == std::byte{0x77});   // body_len = 119，大端
+        CHECK(buf[8] == std::byte{0x01});   // opcode = request
+        CHECK(buf[9] == std::byte{0x00});   // status = ok
 
         // 这一条等式同时钉住了键序（字节字典序）与序列化参数。
-        CHECK(body_of(buf, 6, 119) == kJsonGv1);
+        CHECK(body_of(buf, 10, 119) == kJsonGv1);
 
         // 整帧与独立构造的参考帧比对（make_frame 不经过 htonl，字节序独立）。
         const std::vector<std::byte> expect = make_frame(0x01, 0x00, kJsonGv1);
-        CHECK(expect.size() == 125);
-        for (std::size_t i = 0; i < 125; ++i) {
+        CHECK(expect.size() == 129);
+        for (std::size_t i = 0; i < 129; ++i) {
             CHECK(buf[i] == expect[i]);
         }
     }
@@ -167,16 +172,20 @@ namespace {
 
         const types::IoStatus st = codec::Encoder::encode(rmp, buf, out_len);
         CHECK(st == types::IoStatus::ok);
-        CHECK(out_len == 264);
+        CHECK(out_len == 268);
 
-        CHECK(buf[0] == std::byte{0x02});   // opcode = response
-        CHECK(buf[1] == std::byte{0x01});   // status = fail，与 opcode 不同值，防止字段错位被掩盖
-        CHECK(buf[2] == std::byte{0x00});
-        CHECK(buf[3] == std::byte{0x00});
-        CHECK(buf[4] == std::byte{0x01});
-        CHECK(buf[5] == std::byte{0x02});   // 258 = 0x00000102
+        CHECK(buf[0] == std::byte{0xAD});   // magic 0xFADEBEAD
+        CHECK(buf[1] == std::byte{0xBE});
+        CHECK(buf[2] == std::byte{0xDE});
+        CHECK(buf[3] == std::byte{0xFA});
+        CHECK(buf[4] == std::byte{0x00});
+        CHECK(buf[5] == std::byte{0x00});
+        CHECK(buf[6] == std::byte{0x01});
+        CHECK(buf[7] == std::byte{0x02});   // 258 = 0x00000102
+        CHECK(buf[8] == std::byte{0x02});   // opcode = response
+        CHECK(buf[9] == std::byte{0x01});   // status = fail，与 opcode 不同值，防止字段错位被掩盖
 
-        CHECK(body_of(buf, 6, 258) == kJsonGv2);
+        CHECK(body_of(buf, 10, 258) == kJsonGv2);
     }
 
     // ---------------------------------------------------------------------
@@ -191,10 +200,10 @@ namespace {
 
         const types::IoStatus st = codec::Encoder::encode(rmp, buf, out_len);
         CHECK(st == types::IoStatus::ok);
-        CHECK(out_len == 126);
-        CHECK(buf[5] == std::byte{0x78});   // body_len = 120
+        CHECK(out_len == 130);
+        CHECK(buf[7] == std::byte{0x78});   // body_len = 120
 
-        const std::string body = body_of(buf, 6, 120);
+        const std::string body = body_of(buf, 10, 120);
         CHECK(body == kJsonGv3);
 
         // ensure_ascii=false：CJK 必须原样落字节，不得出现 \uXXXX 转义。
@@ -206,9 +215,9 @@ namespace {
         CHECK(marker != std::string::npos);
         const std::size_t cjk_off = marker + 12;   // 跳过 "content_":" 共 12 字节
         CHECK(cjk_off == 52);
-        CHECK(buf[6 + cjk_off + 0] == std::byte{0xE4});
-        CHECK(buf[6 + cjk_off + 1] == std::byte{0xBD});
-        CHECK(buf[6 + cjk_off + 2] == std::byte{0xA0});
+        CHECK(buf[10 + cjk_off + 0] == std::byte{0xE4});
+        CHECK(buf[10 + cjk_off + 1] == std::byte{0xBD});
+        CHECK(buf[10 + cjk_off + 2] == std::byte{0xA0});
     }
 
     // ---------------------------------------------------------------------
@@ -237,8 +246,8 @@ namespace {
         std::uint32_t          out_len = 0;
 
         CHECK(codec::Encoder::encode(rmp, buf, out_len) == types::IoStatus::ok);
-        CHECK(out_len == 125);
-        for (std::size_t i = 125; i < 1024; ++i) {
+        CHECK(out_len == 129);
+        for (std::size_t i = 129; i < 1024; ++i) {
             CHECK(buf[i] == std::byte{0xAA});
         }
     }
@@ -312,11 +321,15 @@ namespace {
 
         const types::IoStatus st = codec::Encoder::encode(rmp, buf, out_len);
         CHECK(st == types::IoStatus::ok);   // 不是 error：校验由上层负责
-        CHECK(out_len == 98);
-        CHECK(buf[0] == std::byte{0x00});
-        CHECK(buf[1] == std::byte{0x00});
-        CHECK(buf[5] == std::byte{0x5C});   // body_len = 92
-        CHECK(body_of(buf, 6, 92) == kJsonGv4);
+        CHECK(out_len == 102);
+        CHECK(buf[0] == std::byte{0xAD});   // magic 0xFADEBEAD
+        CHECK(buf[1] == std::byte{0xBE});
+        CHECK(buf[2] == std::byte{0xDE});
+        CHECK(buf[3] == std::byte{0xFA});
+        CHECK(buf[7] == std::byte{0x5C});   // body_len = 92
+        CHECK(buf[8] == std::byte{0x00});   // opcode = ack
+        CHECK(buf[9] == std::byte{0x00});   // status = ok
+        CHECK(body_of(buf, 10, 92) == kJsonGv4);
     }
 
     // ---------------------------------------------------------------------
@@ -327,7 +340,7 @@ namespace {
                                                      std::declval<std::vector<std::byte>&>(),
                                                      std::declval<std::uint32_t&>())),
                       "Encoder::encode must be noexcept");
-        static_assert(FrameHeader::wire_size == 6, "wire header must be 6 bytes");
+        static_assert(FrameHeader::wire_size == 10, "wire header must be 10 bytes");
     }
 } // namespace
 

@@ -82,7 +82,7 @@ namespace {
         std::uint32_t out_len = 0;
 
         CHECK(codec::Encoder::encode(src, buf, out_len) == types::IoStatus::ok);
-        CHECK(out_len == 125);
+        CHECK(out_len == 129);
         CHECK(buf.size() == 1024);   // 不裁剪
 
         MessagePack dst;
@@ -107,7 +107,7 @@ namespace {
         std::uint32_t out_len = 0;
 
         CHECK(codec::Encoder::encode(src, buf, out_len) == types::IoStatus::ok);
-        CHECK(out_len == 264);
+        CHECK(out_len == 268);
 
         MessagePack dst;
         CHECK(codec::Decoder::decode(buf, dst) == types::IoStatus::ok);
@@ -132,7 +132,7 @@ namespace {
         std::uint32_t out_len = 0;
 
         CHECK(codec::Encoder::encode(src, buf, out_len) == types::IoStatus::ok);
-        CHECK(out_len == 126);
+        CHECK(out_len == 130);
 
         MessagePack dst;
         CHECK(codec::Decoder::decode(buf, dst) == types::IoStatus::ok);
@@ -189,7 +189,7 @@ namespace {
 
         CHECK(codec::Encoder::encode(src, buf, out_len) == types::IoStatus::ok);
         buf.resize(out_len);
-        CHECK(buf.size() == 125);
+        CHECK(buf.size() == 129);
 
         MessagePack dst;
         CHECK(codec::Decoder::decode(buf, dst) == types::IoStatus::ok);

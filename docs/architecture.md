@@ -85,24 +85,25 @@ flowchart TD
 
 ### 2.4 分帧协议（帧格式）
 
-为解决 TCP 字节流的粘包 / 拆包问题，采用**固定头（6 字节）+ 可变体**的帧结构。编解码在逻辑分层上仍归核心层，实现位于 `src/common/` 的 `codec::`，通信双方共用。
+为解决 TCP 字节流的粘包 / 拆包问题，采用**固定头（10 字节）+ 可变体**的帧结构。编解码在逻辑分层上仍归核心层，实现位于 `src/common/` 的 `codec::`，通信双方共用。
 
-**帧头布局（固定 6 字节）**
+**帧头布局（固定 10 字节）**
 
 | 偏移 | 长度 | 字段 | 类型 | 说明 |
 |---|---|---|---|---|
-| 0 | 1 | `opcode` | `enum class : uint8_t` | 帧用途，互斥枚举值 |
-| 1 | 1 | `status` | `enum class : uint8_t` | 状态 / 结果码枚举值 |
-| 2–5 | 4 | `body_len` | `uint32`，网络字节序（大端） | 可变体字节数，**不含头** |
+| 0–3 | 4 | `magic_num` | `uint32`，本机字节序 memcpy | 魔数 `0xFADEBEAD`，不匹配直接拒帧 |
+| 4–7 | 4 | `body_len` | `uint32`，网络字节序（大端） | 可变体字节数，**不含头** |
+| 8 | 1 | `opcode` | `enum class : uint8_t` | 帧用途，互斥枚举值 |
+| 9 | 1 | `status` | `enum class : uint8_t` | 状态 / 结果码枚举值 |
 
 - **字节序**：`body_len` 一律网络字节序（大端），发送 `htonl`、接收 `ntohl`。
 - **opcode / status 用 `enum class`（限定作用域枚举）并显式指定底层类型 `uint8_t`**：恰好 1 字节、与线上字段等宽；阻断隐式 `enum → int` 转换，避免不同枚举混比或误入算术。线上字节 ↔ 枚举必须显式 `static_cast`，且**解码器须先校验读到的字节是已知枚举值**——未知 opcode / status 一律当协议错误拒绝（`IoStatus::Error`），不盲信线上字节。
 - **opcode 的用途**：核心层无需反序列化包体即可知道帧用途，可据此做早期分派（例如心跳无需走完整反序列化）；控制层按此字段判定请求类别。
 - **可变体（Body）**：`Message` 序列化后的字节，采用 **JSON** 序列化（demo 性质，优先可读与实现简单）。
 
-**收帧流程（核心层）**：读满 6 字节帧头 → 取 opcode / status（校验为已知枚举）、`ntohl` 解出 `body_len` → 校验 `body_len` 不超过上限常量 `max_message_body_length`（65530，见 `common/message.h`）；超过则以 `IoStatus::FrameTooLong` 拒绝，连接级处置（丢弃后续字节 / 关闭连接）仍待分帧状态机落地 → 按 `body_len` 读满包体 → 反序列化为 `Message` 上交。长度被显式声明，切分不依赖分隔符，能准确处理连续到达（粘包）或被拆分（拆包）的字节流。
+**收帧流程（核心层）**：读满 10 字节帧头 → 校验魔数（不匹配即 `IoStatus::Error`）→ 取 opcode / status（校验为已知枚举）、`ntohl` 解出 `body_len` → 校验 `body_len` 不超过上限常量 `max_message_body_length`（65530，见 `common/message.h`）；超过则以 `IoStatus::FrameTooLong` 拒绝，连接级处置（丢弃后续字节 / 关闭连接）仍待分帧状态机落地 → 按 `body_len` 读满包体 → 反序列化为 `Message` 上交。长度被显式声明，切分不依赖分隔符，能准确处理连续到达（粘包）或被拆分（拆包）的字节流。
 
-**实现注意**：不要把 `Header*` 直接 `reinterpret_cast` 到收到的字节缓冲上（字节序、对齐、strict-aliasing、结构体 padding 都有坑，`sizeof` 也不保证跨平台为 6）。应逐字段解析：按偏移取 opcode / status，`body_len` 用 `memcpy` 取 4 字节再 `ntohl`。
+**实现注意**：不要把 `Header*` 直接 `reinterpret_cast` 到收到的字节缓冲上（字节序、对齐、strict-aliasing、结构体 padding 都有坑，`sizeof` 也不保证跨平台为 10）。应逐字段解析：按偏移取 magic / opcode / status，`body_len` 用 `memcpy` 取 4 字节再 `ntohl`。
 
 > 说明：原枚举值 `LineTooLong` 指按行读取时的行超长；本项目中已重命名为 `FrameTooLong`，语义为"帧体长度超过上限"。部分枚举值（如 `Interrupted` / `Timeout`）是否启用取决于最终读写实现。
 
@@ -225,7 +226,7 @@ fd 会被操作系统回收复用，这是即时通信服务端最典型的串�
 > **本节的开放事项已迁移至 `TODO.md`**（本仓库唯一的开放事项清单）。以下保留为历史上下文，实际待办状态以 `TODO.md` 为准。
 
 - **登录 / 握手协议**（未决）：uid ↔ fd 绑定发生在登录时，登录指令的具体形态（认证方式、`msg_type_` 取值）尚未定义。`register_handler` 已接线（当前 hardcode `"guest"`），`auth_handler` 已声明但校验逻辑仍是恒返回 `true` 的占位。
-- **超长帧防护**（长度校验已落地，连接级处置仍缺）：上限常量 `max_message_body_length = 65530`（`common/message.h`），语义为**帧体字节数，不含 6 字节头**（与 §2.4 的 `body_len` 同义）。编解码两侧现已各有一道校验并产出 `IoStatus::FrameTooLong`。粘包 / 拆包已通过 `IoStatus::incomplete` + drain 循环落地（见 §5 步 3）；仍缺的是"头部声明超长时如何丢弃后续字节并关闭连接"的连接级处置。
+- **超长帧防护**（长度校验已落地，连接级处置仍缺）：上限常量 `max_message_body_length = 65530`（`common/message.h`），语义为**帧体字节数，不含 10 字节头**（与 §2.4 的 `body_len` 同义）。编解码两侧现已各有一道校验并产出 `IoStatus::FrameTooLong`。粘包 / 拆包已通过 `IoStatus::incomplete` + drain 循环落地（见 §5 步 3）；仍缺的是"头部声明超长时如何丢弃后续字节并关闭连接"的连接级处置。
 - **`ResponseMsg::server_seq_` 的去向**（未决）：随消息模型塌缩去掉，尚未确定以何种形式回归（见 §2.5）。
 - **离线消息暂存**（暂不实现）：目标 uid 当前无在线 fd 时的处理暂不落地，仅在协调层预留接口占位；未来可能以数据库承接。分层边界不受影响。
 

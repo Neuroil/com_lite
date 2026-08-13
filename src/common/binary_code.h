@@ -7,6 +7,9 @@
 #include <cstdint>
 
 namespace types {
+    // 魔数
+    constexpr uint32_t magic_head = 0xFADEBEAD;
+
     /* -------------------------------------------------------
      * 定义转换规则
      *
@@ -22,7 +25,6 @@ namespace types {
      *
      * -------------------------------------------------------         *
      */
-
     enum class Opcode : std::uint8_t {
         _init_   = 0xff,
         ack      = 0,

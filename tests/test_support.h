@@ -27,21 +27,29 @@
 // 手工构帧：大端长度由移位写出，刻意不用 htonl、不 include <netinet/in.h>、
 // 不触碰 Encoder —— 否则黄金向量会与被测代码共享同一个字节序 bug。
 // declared_len 独立于 body.size()，以便构造"头部声明长度与实际载荷不符"的畸形帧。
+// 帧头布局见 common/frame_header.h：magic(4) | body_len(4, 大端) | opcode(1) | status(1)
 inline std::vector<std::byte> make_frame(std::uint8_t       opcode,
                                          std::uint8_t       status,
                                          std::uint32_t      declared_len,
                                          const std::string& body) {
     std::vector<std::byte> f;
-    f.reserve(6 + body.size());
+    f.reserve(10 + body.size());
 
-    f.push_back(static_cast<std::byte>(opcode));
-    f.push_back(static_cast<std::byte>(status));
+    // 魔数：0xFADEBEAD 在本机（小端）上经 memcpy 落盘的字节序，与 encoder.h 的
+    // header_encoder 写入方式一致。显式写死，黄金向量不依赖任何主机字节序函数。
+    f.push_back(static_cast<std::byte>(0xAD));
+    f.push_back(static_cast<std::byte>(0xBE));
+    f.push_back(static_cast<std::byte>(0xDE));
+    f.push_back(static_cast<std::byte>(0xFA));
 
     // 网络字节序（大端）：显式移位，不依赖任何主机字节序转换函数。
     f.push_back(static_cast<std::byte>((declared_len >> 24) & 0xFFu));
     f.push_back(static_cast<std::byte>((declared_len >> 16) & 0xFFu));
     f.push_back(static_cast<std::byte>((declared_len >> 8) & 0xFFu));
     f.push_back(static_cast<std::byte>(declared_len & 0xFFu));
+
+    f.push_back(static_cast<std::byte>(opcode));
+    f.push_back(static_cast<std::byte>(status));
 
     for (char c : body) {
         f.push_back(static_cast<std::byte>(static_cast<unsigned char>(c)));
