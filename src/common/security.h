@@ -14,6 +14,8 @@
 #include <vector>
 #include <openssl/rand.h>
 
+#include "hash_details.h"
+
 namespace utils {
     // 日志用途：转换16进制
     inline std::string bin_to_hex(const std::vector<std::byte>& data) {
@@ -39,24 +41,29 @@ namespace security {
         } while (success != 1);
     }
 
-    // 根据盐值哈希
-    // 计算结果输出至 buf
-    inline void salt_hash_compute(
-        const std::vector<std::byte>& hex,
+    // 根据盐值计算哈希
+    // 计算结果输出至 out_buf;成功返回 true。
+    inline bool salt_hash_compute(
+        const std::vector<std::byte>& passwd,
         const std::vector<std::byte>& salt,
-        std::vector<std::byte>&       buf,
-        std::size_t                   iterations,
-        int                           algorithm_name = 3
+        std::vector<std::byte>&       out_buf,
+        std::size_t                   iterations
     ) {
-        switch (algorithm_name) {
-            case 1:
-                // sha-256
-            case 2:
-                // ...
-            default:
-                // sha-512
-                break;
-        }
+        return details::pbkdf2_hash_kdf(passwd, salt, iterations, out_buf);
+    }
+
+    // 生成盐并计算哈希
+    // salt:调用方先 resize 到期望长度(建议 16 字节),本函数填入随机值;
+    // out_buf:调用方先 resize 为期望的哈希字节数,成功后写入结果。
+    // 成功返回 true。
+    inline bool salt_hash_gen(
+        const std::vector<std::byte>& passwd,
+        std::vector<std::byte>&       salt,
+        std::vector<std::byte>&       out_buf,
+        std::size_t                   iterations
+    ) {
+        gen_salt(salt);
+        return details::pbkdf2_hash_kdf(passwd, salt, iterations, out_buf);
     }
 
     // inline bool timer() {
@@ -89,6 +96,17 @@ namespace security {
         }
 
         return result;
+    }
+
+    inline bool register_new_passwd(
+        const std::vector<std::byte>& passwd,
+        std::vector<std::byte>&       salt,
+        std::vector<std::byte>&       buf,
+        std::size_t                   iterations
+    ) {
+        if (passwd.size() < 8) return false;
+
+        return salt_hash_gen(passwd, salt, buf, iterations);
     }
 }
 

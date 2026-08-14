@@ -18,6 +18,11 @@ add_com_lite_test(Assembler   test_assembler)
 add_executable(test_controller test_controller.cpp ${CMAKE_SOURCE_DIR}/src/server/controller/controller.cpp)
 target_link_libraries(test_controller PRIVATE com_lite_base)
 add_test(NAME Controller COMMAND test_controller)
+add_com_lite_test(Security test_security)
+# EVP / RAND 只需 libcrypto。裸名 "OpenSSL" 会展开成 -lOpenSSL,
+# 而 Linux 上库名是 libcrypto / libssl —— 应使用 FindOpenSSL 提供的
+# 导入目标 OpenSSL::Crypto(根 CMakeLists 已 find_package(OpenSSL REQUIRED))。
+target_link_libraries(test_security PRIVATE OpenSSL::Crypto)
 
 # 头文件自足性：src/ 下每个头文件各生成一个只包含它自己的翻译单元，
 # 全部链进 test_headers。断言在编译期完成 —— 头文件若少写自己直接用到的

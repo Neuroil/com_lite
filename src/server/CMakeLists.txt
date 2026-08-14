@@ -6,3 +6,4 @@ add_executable(server
         controller/controller.cpp
 )
 target_link_libraries(server PRIVATE core ${OPENSSL_LIBRARIES})
+target_compile_definitions(server PRIVATE OPENSSL_API_COMPAT=0x30000000L)
