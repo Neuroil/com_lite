@@ -36,7 +36,8 @@ namespace codec {
             uint32_t safe_len = htonl(fh.body_len_);
             std::memcpy(out_buf.data() + 4, &safe_len, sizeof(safe_len));
 
-            std::memcpy(out_buf.data(), &types::magic_head, sizeof(types::magic_head));
+            uint32_t magic_head = htonl(types::magic_head);
+            std::memcpy(out_buf.data(), &magic_head, sizeof(magic_head));
         }
 
         // body_serializer

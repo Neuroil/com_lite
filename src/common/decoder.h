@@ -33,9 +33,10 @@ namespace codec {
 
                 // 首先校验魔数
                 // 魔数不相同直接拒绝
-                std::uint32_t magic_num = 0;
-                std::memcpy(&magic_num, in_buf.data(), sizeof(magic_num));
-                if (magic_num != types::magic_head) return types::IoStatus::error;
+                std::uint32_t magic_head = 0;
+                std::memcpy(&magic_head, in_buf.data(), sizeof(magic_head));
+                magic_head = ntohl(magic_head);
+                if (magic_head != types::magic_head) return types::IoStatus::error;
 
                 // 枚举值域校验先于 static_cast
                 const auto raw_opcode = static_cast<std::uint8_t>(in_buf[8]);
